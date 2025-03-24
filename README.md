@@ -76,7 +76,3 @@ When conversion fails, the proxy returns a JSON error response with:
 ## Logging
 
 Logs are color-coded and include request/response details at the specified log level.
-
-## License
-
-[Your License Here]

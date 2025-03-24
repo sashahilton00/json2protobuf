@@ -1,4 +1,4 @@
-# Json to Protobuf Proxy
+# Json2Protobuf Proxy
 
 ## Overview
 

@@ -175,77 +175,6 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// if reqMsgType == "" {
-	// 	sendError(w, http.StatusBadRequest, "Missing message type",
-	// 		"Header "+HeaderReqMsgType+" is required", "")
-	// 	return
-	// }
-	//
-	// // Find the message descriptor
-	// msgDesc, ok := messageTypes[reqMsgType]
-	// if !ok {
-	// 	sendError(w, http.StatusBadRequest, "Unknown message type",
-	// 		"Message type "+reqMsgType+" not found in proto definitions", "")
-	// 	return
-	// }
-	//
-	// // Read the request body
-	// body, err := io.ReadAll(r.Body)
-	// if err != nil {
-	// 	sendError(w, http.StatusBadRequest, "Failed to read request body", err.Error(), "")
-	// 	return
-	// }
-	// defer r.Body.Close()
-	//
-	// // Convert JSON to Protobuf
-	// msg := dynamic.NewMessage(msgDesc)
-	// if len(body) > 0 {
-	// 	if err := json.Unmarshal(body, &msg); err != nil {
-	// 		// Try to extract field information from the error message
-	// 		field := extractFieldFromError(err.Error())
-	// 		sendError(w, http.StatusBadRequest, "Invalid JSON", err.Error(), field)
-	// 		return
-	// 	}
-	// }
-	//
-	// // Serialize to protobuf
-	// protoData, err := msg.Marshal()
-	// if err != nil {
-	// 	sendError(w, http.StatusInternalServerError, "Failed to marshal protobuf", err.Error(), "")
-	// 	return
-	// }
-	//
-	// // Prepare forward request
-	// // Ensure the destination host has the correct protocol prefix
-	// if !strings.HasPrefix(destHost, "http://") && !strings.HasPrefix(destHost, "https://") {
-	// 	destHost = "http://" + destHost
-	// }
-	//
-	// if methodType == "" {
-	// 	methodType = r.Method
-	// }
-	//
-	// forwardReq, err := http.NewRequest(
-	// 	methodType,
-	// 	destHost+r.URL.Path,
-	// 	bytes.NewReader(protoData),
-	// )
-	// if err != nil {
-	// 	sendError(w, http.StatusInternalServerError, "Failed to create forward request", err.Error(), "")
-	// 	return
-	// }
-	//
-	// // Copy allowed headers
-	// for key, values := range r.Header {
-	// 	// Skip our custom headers
-	// 	if key == HeaderDestHost || key == HeaderReqMsgType || key == HeaderMethodType {
-	// 		continue
-	// 	}
-	// 	for _, value := range values {
-	// 		forwardReq.Header.Add(key, value)
-	// 	}
-	// }
-
 	// Read the request body (if present)
 	var body []byte
 	var err error
@@ -329,7 +258,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 		forwardReq, err = http.NewRequest(
 			methodType,
 			destHost+r.URL.Path+"?"+r.URL.RawQuery, // Include query parameters
-			nil,                                    // No body
+			nil, // No body
 		)
 	}
 

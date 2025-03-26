@@ -5,16 +5,17 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/fsnotify/fsnotify"
+	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/desc/protoparse"
+	"github.com/jhump/protoreflect/dynamic"
+	"github.com/sirupsen/logrus"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/jhump/protoreflect/desc"
-	"github.com/jhump/protoreflect/dynamic"
-	"github.com/sirupsen/logrus"
+	"sync"
 )
 
 var (
@@ -22,9 +23,10 @@ var (
 	listenAddr   = flag.String("addr", "localhost", "Address to listen on")
 	listenPort   = flag.Int("port", 3000, "Port to listen on")
 	logLevel     = flag.String("log-level", "info", "Log level (debug, info, warn, error)")
-	fileDescs    []*desc.FileDescriptor
+	liveReload   = flag.Bool("live-reload", false, "Enable live reloading of proto files")
 	messageTypes map[string]*desc.MessageDescriptor
 	log          *logrus.Logger
+	protoMutex   sync.RWMutex
 )
 
 const (
@@ -80,6 +82,11 @@ func main() {
 		log.Fatalf("Failed to load proto files: %v", err)
 	}
 
+	// Set up live reload if enabled
+	if *liveReload {
+		go watchProtoFiles(*protoDir)
+	}
+
 	// Set up HTTP server
 	http.HandleFunc("/", handleRequest)
 	endpoint := fmt.Sprintf("%s:%d", *listenAddr, *listenPort)
@@ -90,10 +97,62 @@ func main() {
 	}
 }
 
-func loadProtoFiles(dir string) error {
-	var protoFiles []string
+// watchProtoFiles sets up a file watcher for the proto directory
+func watchProtoFiles(dir string) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Errorf("Failed to create file watcher: %v", err)
+		return
+	}
+	defer watcher.Close()
+
+	// Watch the entire directory recursively
+	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return watcher.Add(path)
+		}
+		return nil
+	})
+
+	if err != nil {
+		log.Errorf("Error setting up file watcher: %v", err)
+		return
+	}
+
+	log.Info("Starting live reload for proto files")
+
+	for {
+		select {
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			// Only reload on write events for .proto files
+			if event.Op&fsnotify.Write == fsnotify.Write && strings.HasSuffix(event.Name, ".proto") {
+				log.Infof("Detected change in proto file: %s", event.Name)
+				if err := safeReloadProtoFiles(dir); err != nil {
+					log.Warnf("Failed to reload proto files: %v", err)
+				}
+			}
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			log.Errorf("File watcher error: %v", err)
+		}
+	}
+}
+
+// safeReloadProtoFiles attempts to reload proto files with error handling
+func safeReloadProtoFiles(dir string) error {
+	// Create temporary storage for new message types
+	tempMessageTypes := make(map[string]*desc.MessageDescriptor)
 
 	// Find all .proto files
+	var protoFiles []string
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -112,8 +171,6 @@ func loadProtoFiles(dir string) error {
 		return fmt.Errorf("no .proto files found in %s", dir)
 	}
 
-	log.Infof("Found %d .proto files", len(protoFiles))
-
 	// Parse proto files
 	parser := protoparse.Parser{
 		ImportPaths: []string{dir},
@@ -129,31 +186,51 @@ func loadProtoFiles(dir string) error {
 		relProtoFiles = append(relProtoFiles, relPath)
 	}
 
-	fileDescs, err = parser.ParseFiles(relProtoFiles...)
+	// Attempt to parse the files without locking
+	parsedFileDescs, err := parser.ParseFiles(relProtoFiles...)
 	if err != nil {
-		return fmt.Errorf("error parsing proto files: %w", err)
+		// Log the specific parsing errors but don't terminate
+		log.Warnf("Proto file parsing errors: %v", err)
+		return err
 	}
 
 	// Build a map of message types
-	for _, fd := range fileDescs {
+	for _, fd := range parsedFileDescs {
 		for _, mt := range fd.GetMessageTypes() {
 			// Store both with and without package name for convenience
 			fullName := mt.GetFullyQualifiedName()
-			messageTypes[fullName] = mt
+			tempMessageTypes[fullName] = mt
 
 			// Also store with just the message name for convenience
 			shortName := mt.GetName()
-			messageTypes[shortName] = mt
+			tempMessageTypes[shortName] = mt
 
 			log.Debugf("Registered message type: %s", fullName)
 		}
 	}
 
-	log.Infof("Loaded %d message types from proto files", len(messageTypes))
+	// Use mutex to safely update global variables
+	protoMutex.Lock()
+	defer protoMutex.Unlock()
+
+	// Update global variables
+	messageTypes = tempMessageTypes
+
+	log.Infof("Successfully reloaded %d message types from proto files", len(messageTypes))
 	return nil
 }
 
+// Modified loadProtoFiles to match the new pattern
+func loadProtoFiles(dir string) error {
+	// Utilize the safeReloadProtoFiles function
+	return safeReloadProtoFiles(dir)
+}
+
 func handleRequest(w http.ResponseWriter, r *http.Request) {
+	// Use read mutex to safely access message types
+	protoMutex.RLock()
+	defer protoMutex.RUnlock()
+
 	destHost := r.Header.Get(HeaderDestHost)
 	reqMsgType := r.Header.Get(HeaderReqMsgType)
 	respMsgType := r.Header.Get(HeaderRespMsgType)

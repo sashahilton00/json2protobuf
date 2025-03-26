@@ -1,4 +1,4 @@
-module json_to_protobuf_proxy
+module json2protobuf
 
 go 1.24.1
 

@@ -21,14 +21,13 @@ Json2Protobuf is a lightweight proxy service that enables seamless JSON to Proto
 ## Installation
 
 ```bash
-go get github.com/sashahilton00/json2protobuf
-go build -o json2protobuf main.go
+go install github.com/sashahilton00/json2protobuf@latest
 ```
 
 ## Usage
 
 ```bash
-./json2protobuf --proto-dir=/path/to/proto/definitions [options]
+json2protobuf --proto-dir=/path/to/proto/definitions [options]
 ```
 
 ### Options

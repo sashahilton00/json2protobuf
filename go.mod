@@ -1,4 +1,4 @@
-module json2protobuf
+module github.com/sashahilton00/json2protobuf
 
 go 1.24.1
 

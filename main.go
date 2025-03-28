@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -24,6 +25,7 @@ var (
 	listenPort   = flag.Int("port", 3000, "Port to listen on")
 	logLevel     = flag.String("log-level", "info", "Log level (debug, info, warn, error)")
 	liveReload   = flag.Bool("live-reload", false, "Enable live reloading of proto files")
+	mkcertHost   = flag.String("mkcert", "", "Enable HTTPS with mkcert for specified hostname")
 	messageTypes map[string]*desc.MessageDescriptor
 	log          *logrus.Logger
 	protoMutex   sync.RWMutex
@@ -87,11 +89,71 @@ func main() {
 		go watchProtoFiles(*protoDir)
 	}
 
-	// Set up HTTP server
-	http.HandleFunc("/", handleRequest)
-	endpoint := fmt.Sprintf("%s:%d", *listenAddr, *listenPort)
-	log.Infof("JSON to Protobuf proxy starting on http://%s", endpoint)
+	// Handle HTTPS with mkcert
+	if *mkcertHost != "" {
+		if err := setupMkcertHTTPS(*mkcertHost, *listenAddr, *listenPort); err != nil {
+			log.Fatalf("Failed to setup HTTPS with mkcert: %v", err)
+		}
+		return
+	}
 
+	// Set up HTTP server
+	setupHTTPServer(*listenAddr, *listenPort)
+}
+
+func setupMkcertHTTPS(hostname, addr string, port int) error {
+	// Check if mkcert is installed
+	cmd := exec.Command("mkcert", "-version")
+	if err := cmd.Run(); err != nil {
+		fmt.Println("Error: mkcert is not installed.")
+		fmt.Println("Please install mkcert first. You can do this with:")
+		fmt.Println("  - For macOS (Homebrew): brew install mkcert")
+		fmt.Println("  - For Windows (Chocolatey): choco install mkcert")
+		fmt.Println("  - For Linux: check mkcert GitHub repository for installation instructions")
+		return fmt.Errorf("mkcert not installed")
+	}
+
+	// Generate hosts file entry suggestion
+	hostsEntry := fmt.Sprintf("127.0.0.1 %s", hostname)
+	fmt.Println("⚠️ Important: Please add the following line to your hosts file:")
+	fmt.Println(hostsEntry)
+	fmt.Println("\nYou can usually do this by editing:")
+	fmt.Println("  - macOS/Linux: /etc/hosts")
+	fmt.Println("  - Windows: C:\\Windows\\System32\\drivers\\etc\\hosts")
+
+	// Locate certificate files
+	cmd = exec.Command("mkcert", "-CAROOT")
+	caRoot, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to get mkcert root: %v", err)
+	}
+
+	caRootPath := strings.TrimSpace(string(caRoot))
+	certPath := filepath.Join(caRootPath, fmt.Sprintf("%s+1.pem", hostname))
+	keyPath := filepath.Join(caRootPath, fmt.Sprintf("%s+1-key.pem", hostname))
+
+	// Generate certificates
+	cmd = exec.Command("mkcert", "-cert-file", certPath, "-key-file", keyPath, hostname)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to generate certificates: %v", err)
+	}
+
+	// Serve HTTPS
+	endpoint := fmt.Sprintf("%s:%d", addr, port)
+	log.Infof("Starting HTTPS JSON to Protobuf proxy on https://%s", endpoint)
+
+	http.HandleFunc("/", handleRequest)
+	return http.ListenAndServeTLS(endpoint, certPath, keyPath, nil)
+}
+
+func setupHTTPServer(addr string, port int) {
+	endpoint := fmt.Sprintf("%s:%d", addr, port)
+	log.Infof("Starting HTTP JSON to Protobuf proxy on http://%s", endpoint)
+
+	http.HandleFunc("/", handleRequest)
 	if err := http.ListenAndServe(endpoint, nil); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
